@@ -1,0 +1,508 @@
+#模型融合
+
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(car)
+library(randomForest)
+library(xgboost)
+#library(rpart)
+library(caret)
+#install.packages('gbm')
+library(gbm)
+library(catboost)
+library(caTools)
+
+head(data0)
+describe(data1.0)
+data1.0 <- select(data0, -c('invest_ot?er', 'id','edu_other', 'edu_yr', 'join_party', 'property_other',
+                            'hukou_loc', 'leisure_5', 'insur_4',
+                            's_birth',  's_work_status', 's_work_type','property_0','invest_4',
+                           'm_birth'))
+# select(data0, -c('invest_other', 'county', 'city', 'id','edu_other', 'edu_yr', 'join_party', 'property_0', 'property_other',
+#                  #             'hukou_loc', 'leisure_5', 'social_neighbor', 'social_friend', 'class_10_after',
+#  ?   ?           #             'insur_4', 'invest_4', 's_birth', 'marital_now', 's_work_status', 's_work_type',
+#                  #             'm_birth'))
+
+#收入占比
+data1.0 <- mutate(data1.0, inc_f = income/(family_income+1))
+#ggplot(data1.0, aes(log(?_m+100)?) + geom_density() + theme_bw()
+# ggplot(data1.0[-which(data1.0$inc_f>1000),], aes(log(inc_f+10))) + geom_density() + theme_bw()
+#which(data1.0$family_income<0)
+#孩子总数。
+data1.0 <- mutate(data1.0, kid = son + daughter)
+
+#cor(data1.0$height_?m[1:8000]/me?n(data1.0$height_cm[1:8000]), train1.0$happiness)
+# 身高与平均身高的占比，
+data1.0 <- mutate(data1.0, height_m = height_cm/mean(height_cm))
+#家里人均收入，并正态化
+data1.0 <- mutate(data1.0, family_m_inc = family_income/family_m)
+data1.0$family_m_inc <- log(data1.0$family_m_inc + 100)
+
+#配偶收入与自己收入比较。，收入大于配偶为1.否0.
+data1.0$s_income <- data0$s_income
+data1.0 <- mutate(data1.0, s_m = if_else(income < s_income, 0, 1))
+
+#家庭人均房屋?婊?
+data1.0<- mutate(data1.0, f_p = floor_area/family_m)
+data1.0$f_p <- log(data1.0$f_p + 1)
+
+#ggplot(data1.0, aes(s_income)) + geom_density() + theme_bw()
+# qqnorm(log(data0$s_income + 1000))
+
+bc_in <- powerTransform(data1.0$income+1)
+data1.0$income <- bcPower(data1.0$income + 10, bc_in$start)
+data1.0$family_income <- log(data1.0$family_income + 2000)
+data1.0$floor_area <- log(data1.0$floor_area + 1)  #发现有一个为0值，用log（x+1）进行正态变换
+data1.0$s_income <- bcPower(data1.0$s_income +?1, ?owerTransform(data0$s_income+1)$start)
+
+data1.0[,]
+
+
+
+
+
+
+
+
+
+train1.0 <- data1.0[1:8000,] %>% cbind(happiness = train_data$happiness, .)
+test1.0 <- data1.0[8001:nrow(data1.0),]
+
+evalmse <- function(preds, dtrain) {
+  labels <- getinfo(dtrain, 'label')
+  score <- sum((labels - preds)^2)/length(labels)
+  return(list(metric = 'mse', value = score))
+}
+set.seed(201909056)
+ind <- sample(1:8000, size = 0.2*8000, replace = T)
+dtrain <- xgb.DMatrix(data = data.matrix(train1.0[-ind,-1]),
+                      label = train1.0$happiness[-ind])
+dtest <- xgb.DMatrix(data = data.matrix(train1.0[ind,-1]),
+                     label = train1.0$happiness[ind])
+watchlist <- list(train = dtrain, 
+                  test = dtest)
+xgb <- xgb.train(data = dtrain,
+                 eat = 0.003, # 0.003,0.7,5,0.9,0.7 
+                 gamma = 0.7,
+                 nrounds = 3000,
+                 max_depth = 5,
+                 subsample = 0.9,
+                 lambda = 0.7,
+                 objective = 'reg:linear',
+                 eval_metric = evalmse,
+                 maximize = F,
+                 early_stopping_rounds = 1000,
+                 colsample_bytree = 0.9,
+                 watchlist = watchlist,
+                 nfold = 5,
+                 seed = 78  ##1234，稳定0.46左右0.01,0.6,10,0.8,0.7
+) #0.50
+test <- xgb.DMatrix(data = data.matrix(test1.0))
+pre <- predict(xgb, test)
+pre <- cbind(data$id[8001:nrow(data)], pre) 
+names(pre) <-c('id', 'pre')
+write.csv(pre, 'pre6.csv', nrow.names = F)
+
+
+
+
+set.seed(616)
+gind <- sample(nrow(train1.0), 0.8*nrow(train1.0))
+gtrain <- train1.0[gind,]
+gtest <- train1.0[-gind,]
+gbdt_model <- gbm(formula = happiness ~ .,
+                  data = gtrain,
+                  distribution = 'gaussian',
+                  n.trees = 1000,
+                  shrinkage = 0.05,
+                  interaction.depth = 3,
+                  cv.folds = 5
+                  )
+gbm.perf(gbdt_model, 
+         plot.it = TRUE, 
+         oobag.curve = FALSE, 
+         overlay  = TRUE, 
+         method = 'cv')
+
+
+summary(gbdt_model)
+gbmpre <- predict(gbdt_model, 
+        gtest[,-1],
+        n.trees = 314) %>% data.frame()
+
+sum((gtest[,1] -gbmpre)^2)/?row(gtest)
+
+
+
+
+asd
+
+
+
+
+#####################   k折gbdt  ########################?############
+
+
+kfold <- function(traindata, k) {
+  accuracy <- NULL  #记录准确率，用根均误差mse，
+  ind <- cut(1:nrow(traindata), breaks = k, labels = F) ##?谐??折
+  for(i in 1:k) {
+    gtrain <- traindata[ind != i,]
+    gtest <- traindata[ind == i,]
+    gbdt_model <- gbm(formula = happiness ~ .,     ##gbdt模型训练
+                      data = gtrain,
+                      distribution = 'gaussian',
+                      n.trees = 1000,
+                      shrinkage = 0.05,
+                      interaction.depth = 3,
+                      cv.folds = 5
+                      )
+    maxperf <- gbm.perf(gbdt_model,                 ##根据cv选择最好的迭代?毓槭魇?
+                        plot.it = TRUE, 
+                        oobag.curve = FALSE, 
+                        overlay = TRUE, 
+                        method = 'cv'
+                        )
+  
+    gbmpre <- predict(gbdt_model, 
+                      gtest[,-1],
+                      n.trees = maxperf) %>% data.frame()
+  
+    accuracy <- append(accuracy, sum((gtest[,1] -gbmpre)^2)/nrow(gtest))
+  }
+  return(accuracy)
+}
+accuracy <-  kfold(train1.0, 5) #进行循环式的5折交叉验证
+
+#######?############?###########################################
+gbmpre <- predict(gbdt_model, 
+                  test1.0,
+                  n.trees = 589) 
+gbmpre <- cbind(data$id[8001:nrow(data)], gbmpre) 
+names(gbmpre) <-c('id', 'pre')
+write.csv(gbmpre, 'gbm.csv', row.names = F)
+
+
+###############################################################
+#bp神经网络。
+library(neuralnet)
+
+
+train1.0 <- train1.0[,xgb.importance(model = xgb)$Feature[1:90]] %>%
+  cbind(happiness = train_data$happiness, .)
+
+
+set.seed(941)
+Ntest <- select(test1.0, c(names(train1.0[, -1]))) %>%  #合并test和train进行标准化
+  mutate(happiness = rep(1,nrow(test1.0))) %>% 
+  rbind(train1.0, .)
+maxs <- apply(Ntest, 2, max)
+mins <- apply(Ntest, 2, min)
+NNtrain <- scale(Ntest, center = mins, scale = maxs - ?ins) %>% 
+          data.frame()    
+
+NNtrain0 <- NNtrain[1:8000,] 
+NNtest0 <- NNtrain[8001:nrow(NNtrain), ]
+
+NNind <- sample(1:8000, 1600)
+Ntrain <- NNtrain0[-NNind,] 
+NNtest <- NNtrain0[NNind,] 
+  
+NN <- neuralnet(happiness ~ ., 
+                data = Ntrain,
+                #hidden = c(2,1),
+                linear.output = T
+                )
+
+NNpre <- predict(NN, NNtest[,-1])
+sum((4*NNtest[,1] - 4*NNpre)^2)/nrow(NNtest)
+
+# NNpre <- predict(NN, NNtest0[, -1])
+# NNpre <- NNpre *4 + 1
+# NNpre ?- cbind(data?id[8001:nrow(data)], NNpre) 
+# names(NNpre) <-c('id', 'pre')
+# write.csv(NNpre, 'NN.csv', row.names = F)
+
+glmm <- glm(happiness~. ,data = gtrain)
+glmpre <- predict.glm(glmm, gtest[,-1])
+
+sum((gtest[, 1] - glmpre)^2)/nrow(gtest)
+
+
+glm_kfold <- function(traindata, k = 5) {
+  accuracy <- NULL  #记录准确率，用根均误差mse，
+  ind <- cut(1:nrow(traindata), breaks = k, labels = F) ##切???k折
+  for(i in 1:k) {
+    gtrain <- traindata[ind != i,]
+    gtest <- traindata[ind == i,]
+    glmm <-?glm(happiness~. ,data = gtrain)
+    
+    glmpre <- predict.glm(glmm, gtest[,-1]) %>%
+              data.frame()
+    
+    accuracy <- append(accuracy, sum((gtest[,1] -glmpre)^2)/nrow(gtest))
+  }
+  return(accuracy)
+}
+glm_accuracy <-  glm_kfold(Ntest[1:8000, ], 5) #进行?肥降?5折交叉验证
+# str_c(c('happiness'), 
+#       str_c(
+#       c(names(train1.0[,-1])) ,
+#       collapse = '+'),
+#       sep  = '~')
+
+
+
+##catboost
+install.packages('catboost')
+library(catboost)
+##模型数据准备，将离散类型变量转换
+data2.0 <- data1.0 %>%
+  select(c("survey_type", "province", "city", "survey_time", "gender",
+           "nationality", "religion", "political", "hukou", "work_exper",
+           "work_status", "work_type", "work_manage", "insur_1", "insur_2",
+           "insur_3", "car", "marital", "s_edu", "f_political",
+           "f_work_14", "m_edu", "m_political","m_work_14","s_hukou","s_work_exper",
+           "f_edu", "s_political"), everything())
+data2.0[,1:28] <- as.factor(data2.0[,1:28])
+
+
+
+train2.0 <- data2.0[1:8000,] %>% cbind(happiness = train_data$happiness, .)
+test2.0 <- data2.0[8001:nrow(data2.0),]
+
+
+set.seed(20190902)
+ind2.0 <- sample(1:8000, size = 0.2*8000, replace = T)
+dtrain2.0 <- catboost.load_pool(data = train2.0[-ind,-1],
+                      label = train2.0$happiness[-ind])
+dtest2.0 <- catboost.load_pool(data = train2.0[ind,-1],
+                     label = train2.0$happiness[ind])
+fit_params <- list(iterations = 1000,
+                   thread_count = 10,
+                   loss_function = 'Logloss',
+                   ignored_features = c(4,9),
+                   border_count = 32,
+                   depth = 5,
+                   learning_rate = 0.01,
+                   train_dir =  'train_dir',
+                   logging_level = 'Silent')
+cat <- catboost.train(dtrain2.0, dtest2.0, fit_params)
+
+catboost.predict(cat, catboost.load_pool(test2.0)) %>% 
+
+
+
+
+
+ad
+
+
+#caret包
+fit_control <- trainControl(method = 'cv',
+                            number = 5,
+                            savePredictions = 'all',
+                            predictionBounds = c(1,5),
+                            seeds = 0603)
+grid <- expand.grid(depth = c(4,5,6,8),
+                    learning_rate = c(0.05,0.005,0.01),
+                    iterations = 100,
+                    l2_leaf_reg = 0.1,
+                    rsm = 0.95,
+                    border_count = 64
+                    )
+cat <- train(train2.0[, -1], train2.0[, 1],
+             method = catboost.caret,
+             logging_level = 'Silent',
+             turnGrid = grid,
+             trControl = fit_control)
+?trainControl
+
+
+# formula <- 
+#   data2.0 %>% 
+#   summarise_all(is.numeric) %>% 
+#   gather() %>% 
+#   filter(value == FALSE) %>%
+#   .$key %>% 
+#   paste(., collapse = "+") %>% 
+#   paste("~",.)
+# data3.0 <- 
+#   bind_cols(
+#     dummyVars(formula, data = data2.0, fullrank = TRUE) %>% 
+#       predict(.,newdata = data2.0) %>% 
+#       as.tibble()
+#     
+#     ,data2.0 %>% 
+#       select_if(is.numeric)  
+#   )
+
+devtools::install_url('https://github.com/catboost/catboost/releases/download/v0.16.5/catboost-R-Windows-0.16.5.tgz', args = c("--no-multiarch"))
+
+
+
+
+
+##stacking
+
+##数据准备
+train1.0 <- data1.0[1:8000,] %>% cbind(happiness = train_data$happiness, .)
+test1.0 <- data1.0[8001:nrow(data1.0),]
+
+##第一层，先对及模型进行5折交叉验证并输出全部数据的预测结果
+stack_ind <- cut(1:8000, breaks = 5, labels = F)
+
+xgb_pre <- NULL
+pre <- NULL
+for (i in 1:5) {
+  
+  dtrain <- xgb.DMatrix(data = data.matrix(train1.0[stack_ind != i,-1]),
+                        label = train1.0$happiness[stack_ind != i])
+  dtest <- xgb.DMatrix(data = data.matrix(train1.0[stack_ind == i,-1]),
+                       label = train1.0$happiness[stack_ind == i])
+  watchlist <- list(train = dtrain, 
+                    test = dtest)
+  evalmse <- function(preds, dtrain) {
+    labels <- getinfo(dtrain, 'label')
+    score <- sum((labels - preds)^2)/length(labels)
+    return(list(metric = 'mse', value = score))
+  }
+  xgb <- xgb.train(data = dtrain,
+                   eat = 0.003, # 0.003,0.7,5,0.9,0.7 
+                   gamma = 0.7,
+                   nrounds = 3000,
+                   max_depth = 5,
+                   subsample = 0.9,
+                   lambda = 0.7,
+                   objective = 'reg:linear',
+                   eval_metric = evalmse,
+                   maximize = F,
+                   early_stopping_rounds = 1000,
+                   colsample_bytree = 0.9,
+                   watchlist = watchlist,
+                   nfold = 5,
+                   seed = 78  ##1234，稳定0.46左右0.01,0.6,10,0.8,0.7
+  ) #0.50
+  xgbtest <- xgb.DMatrix(data = data.matrix(train1.0[stack_ind == i,-1]))
+  xgb_pre <- predict(xgb, xgbtest) %>% 
+              data.frame() %>%
+                rbind(xgb_pre, .)
+  test <- xgb.DMatrix(data = data.matrix(test1.0))
+  pre <- predict(xgb, test) %>%
+            cbind(pre, .)
+}
+##得到xgb的测试集和第二层的输入特征sgb_pre
+pre <- apply(pre, 1, mean) %>% 
+  data.frame()
+
+
+
+##gbdt
+stack_gbmpre <- NULL
+stack_gbmtestpre <- NULL
+for(i in 1:5) {
+  gtrain <- train1.0[stack_ind != i,]
+  gtest <- train1.0[stack_ind == i,]
+  gbdt_model <- gbm(formula = happiness ~ .,     ##gbdt模型训练
+                    data = gtrain,
+                    distribution = 'gaussian',
+                    n.trees = 1000,
+                    shrinkage = 0.05,
+                    interaction.depth = 3,
+                    cv.folds = 5
+  )
+  maxperf <- gbm.perf(gbdt_model,                 ##根据cv选择最好的迭代回归树数量
+                      plot.it = TRUE, 
+                      oobag.curve = FALSE, 
+                      overlay = TRUE, 
+                      method = 'cv'
+  )
+  
+  stack_gbmpre <- predict(gbdt_model, 
+                    gtest[,-1],
+                    n.trees = maxperf) %>% 
+                data.frame() %>%
+                rbind(stack_gbmpre, .)
+  
+  stack_gbmtestpre <- predict(gbdt_model, 
+                              test1.0,
+                              n.trees = maxperf) %>% 
+                      cbind(stack_gbmtestpre, .)
+}
+stack_gbmtestpre <- apply(stack_gbmtestpre, 1, mean) %>% 
+    data.frame()
+
+
+
+
+##神经网络
+Ntrain1.0 <- train1.0[,xgb.importance(model = xgb)$Feature[1:90]] %>%
+  cbind(happiness = train_data$happiness, .)
+Ntest <- select(test1.0, c(names(Ntrain1.0[, -1]))) %>%  #合并test和train进行标准化
+  mutate(happiness = rep(1,nrow(test1.0))) %>% 
+  rbind(Ntrain1.0, .)
+
+NNpre <- NULL; NNtestpre <- NULL
+for(i in 1:5) {
+  maxs <- apply(Ntest, 2, max)
+  mins <- apply(Ntest, 2, min)
+  NNtrain <- scale(Ntest, center = mins, scale = maxs - mins) %>% 
+    data.frame()    
+  NNtrain0 <- NNtrain[1:8000,] 
+  NNtest0 <- NNtrain[8001:nrow(NNtrain), ]  ##测试集
+  Ntrain <- NNtrain0[stack_ind != i,] 
+  NNtest <- NNtrain0[stack_ind == i,] 
+  NN <- neuralnet(happiness ~ ., 
+                  data = Ntrain,
+                  #hidden = c(2,1),
+                  linear.output = T
+  )
+  
+  NNpre <- predict(NN, NNtest[,-1]) %>%
+          data.frame() %>%
+          rbind(NNpre, .)
+  NNtestpre <- predict(NN, NNtest0) %>%
+          cbind(NNtestpre, .)
+}
+
+
+
+
+
+
+
+
+# dtrain <- xgb.DMatrix(data = data.matrix(train1.0[stack_ind != 1,-1]),
+#                       label = train1.0$happiness[stack_ind != 1])
+# dtest <- xgb.DMatrix(data = data.matrix(train1.0[stack_ind == 1,-1]),
+#                      label = train1.0$happiness[stack_ind == 1])
+# watchlist <- list(train = dtrain, 
+#                   test = dtest)
+# evalmse <- function(preds, dtrain) {
+#   labels <- getinfo(dtrain, 'label')
+#   score <- sum((labels - preds)^2)/length(labels)
+#   return(list(metric = 'mse', value = score))
+# }
+# xgb <- xgb.train(data = dtrain,
+#                  eat = 0.003, # 0.003,0.7,5,0.9,0.7 
+#                  gamma = 0.7,
+#                  nrounds = 3000,
+#                  max_depth = 5,
+#                  subsample = 0.9,
+#                  lambda = 0.7,
+#                  objective = 'reg:linear',
+#                  eval_metric = evalmse,
+#                  maximize = F,
+#                  early_stopping_rounds = 1000,
+#                  colsample_bytree = 0.9,
+#                  watchlist = watchlist,
+#                  nfold = 5,
+#                  seed = 78  ##1234，稳定0.46左右0.01,0.6,10,0.8,0.7
+# ) #0.50
+# xgbtest <- dtest <- xgb.DMatrix(data = data.matrix(train1.0[ind == i,-1]))
+# xgb_pre <- sum((predict(xgb, xgbtest) - train1.0[ind != i])^2)/nrow(train1.0) %>% 
+#   rbind(xgb_pre, .)
+# test <- xgb.DMatrix(data = data.matrix(test1.0))
+# pre <- predict(xgb, test) %>%
+#   cbind(pre, .)
