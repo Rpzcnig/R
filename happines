@@ -1,0 +1,660 @@
+library(tidyverse)
+library(Hmisc)
+library(lubridate)
+library(ggpubr) #画图时多张页面显示在同一界面
+?read_csv
+train_data <- read_csv('happiness_train_complete.csv')
+test_data <- read_csv('happiness_test_complete.csv')
+data <- rbind(train_data[-2], test_data)
+
+describe(data0)
+# 首先分析，该赛题是预测幸福值的问题，且是分类结果，只能为-8,1-5，六种
+
+## 1、数据探索
+  #1.1目标值
+  # 观察到幸福值为4的人数较多，且总体分布呈现左偏。因为类别中还有-8
+  # 在数据预处理时要注意这点
+ggplot(train_data[-which(train_data$happiness<0),], aes(happiness)) + 
+  geom_bar() + theme_bw()
+sa <- train_data[which(train_data$happiness<0),]
+
+#1.2个体变量分析
+  #样本类型，填写问卷人是处于城市还是农村填写。值1或2
+  #观察到总体的的问卷有6成来自城市
+ggplot(data, aes(survey_type)) +
+  geom_bar() + theme_bw()
+
+size <- c(round(100*length(which(data$survey_type == 1))/nrow(data), 2),
+          round(100*length(which(data$survey_type == 2))/nrow(data), 2))
+label <- str_c(c('城市', '乡村'), size, c('%','%'), '')
+pie(x = size, labels = label, col = c('red', 'green')) 
+  #观察训练样本与测试样本分布是否一致 ,可以大致看出，分布一致。
+  #且城市的幸福值总体都高于农村调查的
+p1 <- ggplot(train_data, aes(survey_type)) +
+  geom_bar(fill = 'red') + theme_bw()
+p2 <- ggplot(test_data, aes(survey_type)) +
+  geom_bar(fill = 'red') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+ggplot(train_data, aes(x= survey_type, fill = as.character(happiness))) +
+  geom_bar(position = 'dodge') + theme_bw()
+
+
+
+  #采访地点,有几个省份没有调查。且分布大致一致，
+  #这三个采访地点变量，其实有包含意味，看看他们的相关性，
+
+p3 <- ggplot(data, aes(province)) +
+  geom_histogram(fill = 'green', binwidth = 1) + theme_bw()
+
+p1 <- ggplot(train_data, aes(province)) +
+  geom_histogram(fill = 'green', binwidth = 1) + theme_bw()
+p2 <- ggplot(test_data, aes(province)) +
+  geom_histogram(fill = 'green', binwidth = 1) + theme_bw()
+ggarrange(p1, p2, p3, nrow = 3)
+
+ggplot(train_data, aes(as.character(province), happiness)) +
+  geom_boxplot() + theme_bw()
+  
+
+ggarrange(ggplot(data, aes(county)) +
+  geom_histogram(fill = 'green', binwidth = 1) + theme_bw(),
+  ggplot(data, aes(city)) +
+    geom_histogram(fill = 'green', binwidth = 1) + theme_bw(),
+  nrow = 2)
+table(data$province, data$county)
+chisq.test(table(data$city, data$county))
+
+  #问卷当前时间，由于实际中，短期内时间起不来太大作用，所以只取月份作为特征。
+  #大多在7月份调查，不呈正态，后面可以尝试删除。并且发现可能有异常值
+data$survey_time <- sapply(str_split(data$survey_time, pattern = ' '), '[', 1) %>%
+          ymd(.) %>% month(.)
+ggplot(data, aes(survey_time)) + 
+  geom_bar() + theme_bw()
+
+  #性别,女性偏多,且分布一致
+ggplot(data, aes(gender)) +
+  geom_bar() + theme_bw()
+
+size <- c(round(100*length(which(data$gender == 1))/nrow(data), 2),
+          round(100*length(which(data$gender == 2))/nrow(data), 2))
+label <- str_c(c('男', '女'), size, c('%','%'), '')
+
+pie(x = size, labels = label, col = c('red', 'green')) 
+p1 <- ggplot(train_data, aes(gender)) +
+  geom_bar(fill = 'red') + theme_bw()
+p2 <- ggplot(test_data, aes(gender)) +
+  geom_bar(fill = 'red') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+  #出生年月,有呈现正态分布,且分布大致相同
+
+ggplot(data0, aes(birth)) +
+  geom_density() + theme_bw()
+
+p1 <- ggplot(train_data, aes(birth)) +
+  geom_bar(fill = 'red') + theme_bw()
+p2 <- ggplot(test_data, aes(birth)) +
+  geom_bar(fill = 'red') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+  #民族，大多全是汉族。少部分其他。有异常值
+  #宗教信仰近8成不信
+  #参加宗教信仰频率，应该与上一个问题有关，可以做个假设检验，然后选择其中一个特征
+
+ggplot(data0, aes(nationality)) +
+  geom_bar() + theme_bw()
+
+p1 <- ggplot(train_data, aes(nationality)) +
+  geom_bar(fill = 'red') + theme_bw()
+p2 <- ggplot(test_data, aes(nationality)) +
+  geom_bar(fill = 'red') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+ggplot(data, aes(data$religion)) +
+  geom_bar() + theme_bw()
+
+ggplot(data, aes(data$religion_freq)) +
+  geom_bar() + theme_bw()
+
+chisq.test(table(data$religion, data$religion_freq))
+
+  # 最高教育程度，大致分布一致，后面数据预处理时，适当将一些 类别归类。
+  # 并尝试调整分布，并且发现有异常值，注意是否与edu_orthers有关
+  # 目前教育程度其他，因缺失值过多，考虑直接删除该变量。
+
+  # 最高教育程度状态， 分布大致一样，有缺失值和异常值等
+  
+  # 完成最高教育年份。分布大致一样。但并不呈正态，可以适当调整结构
+ggplot(data, aes(data$edu)) +
+  geom_bar() + theme_bw()
+p1 <- ggplot(train_data, aes(edu)) +
+  geom_bar(fill = 'red') + theme_bw()
+p2 <- ggplot(test_data, aes(edu)) +
+  geom_bar(fill = 'red') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+
+ggplot(data, aes(data$edu_status)) +
+  geom_bar() + theme_bw()
+p1 <- ggplot(train_data, aes(edu_status)) +
+  geom_bar(fill = 'red') + theme_bw()
+p2 <- ggplot(test_data, aes(edu_status)) +
+  geom_bar(fill = 'red') + theme_bw()
+
+ggarrange(p1, p2, nrow = 2)
+  
+ggplot(data[which(data$edu_yr>10),], aes(edu_yr)) +
+  geom_bar() + theme_bw()
+p1 <- ggplot(train_data[which(train_data$edu_yr>10),], aes(edu_yr)) +
+  geom_bar(fill = 'red') + theme_bw()
+p2 <- ggplot(test_data[which(test_data$edu_yr>500),], aes(edu_yr)) +
+  geom_bar(fill = 'red') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ # 收入,呈现左偏的,且分布总体差不多，但有一些瑕疵，试着正态变换
+ # 收入高的普遍幸福，有呈正相关现象
+ggplot(data0, aes(log10(income+10))) + geom_density() + theme_bw()
+
+p1 <- ggplot(train_data, aes(income)) + geom_density() + theme_bw()
+p2 <- ggplot(test_data, aes(income)) + geom_density() + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+cor.test(train_data$income,train_data$happiness)
+ggplot(train_data[-which(train_data$income>200000),], 
+       aes(id, income,color = as.character(happiness))) + geom_point()
+ggplot(train_data[-which(train_data$income>200000),], 
+       aes(as.character(happiness),income)) + geom_boxplot()
+
+
+ # 政治面貌,分布大致一样,群众较多，可以考虑将共青团员，民主党派，共产党员合并，
+ # 由于这三类人数较少，考虑到影响可能不大，做个假设检验。
+ # 目前是共产党员，缺失值太多，考虑删除，
+ggplot(data, aes(data$political)) +
+  geom_bar() + theme_bw()
+p1 <- ggplot(train_data, aes(political)) +
+  geom_bar(fill = 'red') + theme_bw()
+p2 <- ggplot(test_data, aes(political)) +
+  geom_bar(fill = 'red') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ # 住房面积,可能存在异常值，或离群点（具体再看）整体显正态,分布较为一致
+
+ggplot(data, aes(log(floor_area+1))) + geom_density() + theme_bw()
+
+p1 <- ggplot(train_data, aes(floor_area)) + geom_density() + theme_bw()
+p2 <- ggplot(test_data, aes(floor_area)) + geom_density() + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ #房产权归属，先求和，看占比，大多数自己所有，这里后面处理特征时可以适当归并一些类别，
+sum(data$property_0)
+sum(data$property_1)
+sum(data$property_2)
+sum(data$property_3)
+sum(data$property_4)
+sum(data$property_5)
+sum(data$property_6)
+sum(data$property_7)
+sum(data$property_8)
+sum(data$property_orther)
+
+
+ # 身高 总体呈正态分布
+ # 体重  同上且分布一致
+ggplot(data, aes(height_cm)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+p1 <- ggplot(train_data, aes(height_cm)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(height_cm)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(data, aes(weight_jin)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+p1 <- ggplot(train_data, aes(weight_jin)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(weight_jin)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ # 身体健康,总体还是比较健康，注意有些为-8 不知道的
+ # 影响的频繁程度
+ # 感到心情抑郁与上一个问题有联系，
+ggplot(data, aes(health)) + geom_bar() + theme_bw()
+
+ggplot(data, aes(health_problem)) + geom_bar() + theme_bw()
+chisq.test(table(data$health, data$depression))
+
+ # 户口登记情况,分布大致一样
+ggplot(data, aes(hukou)) + geom_bar() + theme_bw()
+p1 <- ggplot(train_data, aes(hukou)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(hukou)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ #过去一年对媒体使用情况，可以将6个试着合并成多个个，按分布情况合并,
+ # 分布大致一样，但训练集有-8的情况注意。
+ # 其他媒体使用情况都是一样的，在特征工程时可以用用
+ # 1,2,3，6 分布大致一致， 4，5，有待商榷
+ggplot(data, aes(media_5)) + geom_bar() +theme_bw()
+p1 <- ggplot(train_data, aes(media_1)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(media_1)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(data, aes(media_2)) + geom_bar() +theme_bw()
+p1 <- ggplot(train_data, aes(media_2)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(media_2)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(data, aes(media_3)) + geom_bar() +theme_bw()
+p1 <- ggplot(train_data, aes(media_3)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(media_3)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+ggplot(data, aes(media_4)) + geom_bar() +theme_bw()
+p1 <- ggplot(train_data, aes(media_4)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(media_4)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(data, aes(media_5)) + geom_bar() +theme_bw()
+p1 <- ggplot(train_data, aes(media_5)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(media_5)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(data, aes(media_6)) + geom_bar() +theme_bw()
+p1 <- ggplot(train_data, aes(media_6)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(media_6)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ # 过去一年空闲时从事的活动频繁程度,同样训练集有-8情况，分布大致一样
+ggplot(data, aes(leisure_3)) + geom_bar(fill = 'green') +theme_bw()
+p1 <- ggplot(train_data, aes(leisure_1)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_1)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(data, aes(leisure_2)) + geom_bar() +theme_bw()
+p1 <- ggplot(train_data, aes(leisure_2)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_2)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+cor.test(train_data$leisure_1, train_data$happiness)
+
+
+ggplot(data, aes(leisure_3)) + geom_bar() +theme_bw()
+p1 <- ggplot(train_data, aes(leisure_3)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_3)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_4)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_4)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+p1 <- ggplot(train_data, aes(leisure_5)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_5)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_6)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_6)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_7)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_7)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_8)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_8)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_9)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_9)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_10)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_10)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_11)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_11)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_12)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_12)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(leisure_12)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(leisure_12)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ #57-59 大致分布一样，发现社交非常频繁都普遍幸福值大，考虑有较强的相关性
+ # 虽然才0.1的正相关性，但同其他变量来说已经很高了。
+ #看的出来还是大多数人不爱学习。
+p1 <- ggplot(train_data, aes(socialize)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(socialize)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(train_data, aes(as.character(socialize), happiness)) +
+  geom_boxplot() + theme_bw()
+cor(train_data$happiness, train_data$socialize)
+
+p1 <- ggplot(train_data, aes(relax)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(relax)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(train_data, aes(as.character(relax), happiness)) +
+  geom_boxplot() + theme_bw()
+cor(train_data$happiness, train_data$relax)  #达到0.134
+
+p1 <- ggplot(train_data, aes(learn)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(learn)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(train_data, aes(as.character(learn), happiness)) +
+  geom_boxplot() + theme_bw()
+cor(train_data$happiness, train_data$learn)  #达到0.116
+
+ #socia_neighbourhor friend有缺失值,这三个好像都一样的分布
+p1 <- ggplot(train_data, aes(social_neighbor)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(social_neighbor)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p11 <- ggplot(train_data, aes(social_friend)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p22 <- ggplot(test_data, aes(social_friend)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p111 <- ggplot(train_data, aes(socia_outing)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p222 <- ggplot(test_data, aes(socia_outing)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+ggarrange(p1,p2,p11,p22,p111,p222,nrow = 3,ncol = 2)
+
+ # equity 尝试分成两类，45和123，
+p1 <- ggplot(train_data, aes(equity)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(equity)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(train_data, aes(as.character(class), happiness)) +
+  geom_boxplot() + theme_bw()
+ # class 与10_after显示出较强的相关性 三个留一个就行
+p1 <- ggplot(train_data, aes(class)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(class)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(class_10_before)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(class_10_before)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(class_10_after)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(class_10_after)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+cor(data$class,data$class_10_before) #0.516 after， 0.6829 before 0.35b a a
+ggplot(train_data, aes(as.character(class_10_after), happiness)) +
+  geom_boxplot() + theme_bw()
+
+p1 <- ggplot(train_data, aes(class_14)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(class_14)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ # work
+ # 工作年限，分布大致相同，但呈右偏，考虑变换，呈正态,log变换并不能实现正态变换，
+ # yr, type ，manage都有缺失值
+p1 <- ggplot(train_data, aes(work_exper)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(work_exper)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(work_status)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(work_status)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(data0, aes(work_yr)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(work_yr)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(work_type)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(work_type)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(work_manage)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(work_manage)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ # 社会保障项目1-4
+p1 <- ggplot(train_data, aes(insur_1, fill = as.character(happiness))) + 
+  geom_bar(position = 'dodge') + theme_bw()
+p2 <- ggplot(test_data, aes(insur_4)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+cor(data$insur_3, data$insur_4) #0.86 较强相关性
+
+## 家庭影响分析 
+ #家庭收入有缺失值，
+ #家庭人数有异常值，出现超过10人以上，可能录入时出现错误
+
+ggplot(data, aes(family_income)) + geom_histogram() + theme_bw()
+
+p1 <- ggplot(train_data, aes(family_income)) + geom_density() + theme_bw()
+p2 <- ggplot(test_data, aes(family_income)) + geom_density() + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+cor.test(train_data$family_income,train_data$happiness)
+ggplot(train_data[-which(train_data$family_income>200000),], 
+       aes(id, family_income,color = as.character(happiness))) + geom_point()
+ggplot(train_data[-which(train_data$family_income>200000),], 
+       aes(as.character(happiness),family_income)) + geom_boxplot()
+
+p1 <- ggplot(train_data, aes(family_m)) + geom_bar() + theme_bw()
+p2 <- ggplot(test_data, aes(family_m)) + geom_density() + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(family_status)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(family_status)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+library(tidyverse)
+library(ggpubr)
+ # 房子好像有异常值，总体偏正态
+ # 有没有车，box图，相似
+ggplot(data[-which(data$house>25),], aes(house)) + geom_density() + theme_bw()
+
+ggplot(train_data, aes(as.character(house), happiness)) +
+  geom_boxplot() + theme_bw()
+
+ggplot(data, aes(car)) + geom_density() + theme_bw()
+ggplot(train_data[-which(train_data$car<0),], aes(as.character(car), happiness)) +
+  geom_boxplot() + theme_bw() +
+  ylim(0,5) 
+p1 <- ggplot(train_data, aes(car)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(car)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+chisq.test(table(as.character(train_data$car),train_data$happiness))
+
+ # 投资,这里后面处理数据时试着将8个投资组合成为，有投资或没投资。
+p1 <- ggplot(train_data, aes(invest_5)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(invest_5)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+cor(data$invest_4,data$invest_5)
+ # 儿子和女儿可以合成，有多少孩子，
+p1 <- ggplot(train_data, aes(son)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(son)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+p1 <- ggplot(train_data, aes(daughter)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(daughter)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ggplot(train_data) +
+  geom_boxplot(aes(as.character(son), happiness, fill = daughter)) + theme_bw()
+
+p1 <- ggplot(train_data, aes(minor_child)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(minor_child)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+cor(data$minor_child,data$daughter) # 有缺失值
+
+p1 <- ggplot(train_data[which(train_data$marital_now>0),], aes(marital_now)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(marital)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+ #不管婚姻状况如何，大都幸福值保持4,6.321，的情况，即和幸福关系不大（有待商榷）
+ # 第一次结婚时间可以换成，成婚年龄更具说服力，可能婚龄越长，更幸福，
+ # s_birth 直接删了，意义不大，marital_now可以跟第一次结婚时间联系，判断是否离过婚。
+ # 实际中可能离过婚的人幸福值都有可能较小，
+
+ggplot(train_data, aes(marital,fill = as.character(happiness))) + 
+  geom_bar(position = 'dodge') + theme_bw()
+geom_histogram()
+p1 <- ggplot(train_data, aes(s_hukou)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(s_edu)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2) #有缺失值
+
+p1 <- ggplot(train_data, aes(s_income)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(s_income)) + 
+  geom_density(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2) #有缺失值 且不呈正态分布
+
+p1 <- ggplot(train_data, aes(s_work_type)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(s_work_type)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+ggplot(train_data, aes(s_work_type,fill = as.character(happiness))) + 
+  geom_bar(position = 'dodge') + theme_bw()
+ #f 换成 m, 意外发现父亲与母亲的教育程度大致一致，看是否有关联。
+p1 <- ggplot(train_data, aes(f_edu)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(f_edu)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2) #分布一致，父亲的教育，通常会影响下一代的成长，从而影响幸福值
+
+p1 <- ggplot(train_data, aes(f_political)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(m_political)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2) #有缺失值，mf大致一样同edu，分析
+
+p1 <- ggplot(train_data, aes(f_work_14)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(f_work_14)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+
+p1 <- ggplot(train_data, aes(status_peer)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(status_peer)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+ggplot(train_data, aes(status_peer,fill = as.character(happiness))) + 
+  geom_bar(position = 'stack') + theme_bw()
+
+p1 <- ggplot(train_data, aes(status_3_before)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(status_3_before)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+ggplot(train_data, aes(as.character(status_3_before),happiness)) + 
+  geom_boxplot() + theme_bw()
+
+p1 <- ggplot(train_data, aes(view)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(view)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+#p1 <-
+ ggplot(train_data, aes(fa)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+p2 <- ggplot(test_data, aes(inc_ability)) + 
+  geom_bar(fill = 'yellow') + theme_bw()
+ggarrange(p1, p2, nrow = 2)
+ggplot(train_data, aes(inc_ability, fill = as.character(happiness))) + 
+  geom_bar(position = 'stack') + theme_bw()
+ggplot(train_data, aes(as.character(inc_ability), happiness)) + 
+  geom_boxplot() + theme_bw()
+ # 这个可能是个重要的特征，
+
+ggplot(train_data, aes(inc_exp)) +
+  geom_density() +theme_bw()
+
+ggplot(data0, aes(public_service_8)) +
+  geom_density() + theme_bw()
+# 最后几个好像有较强的相关性，在特征预处理时，选一个就行。
